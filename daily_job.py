@@ -43,6 +43,7 @@ def main() -> None:
     order_stocks_history: list[dict[str, Any]] = []
     other_transactions: list[dict[str, Any]] = []
     inventory_counts: list[dict[str, Any]] = []
+    products_inventory: list[dict[str, Any]] = []
 
     fetch_error = None
     try:
@@ -94,6 +95,7 @@ def main() -> None:
             "inventory_counts",
             lambda: client.get_inventory_counts(report_date),
         )
+        products_inventory = client.get_products_inventory()
     except Exception as exc:
         fetch_error = str(exc)
 
@@ -113,6 +115,7 @@ def main() -> None:
         order_stocks_history=order_stocks_history,
         other_transactions=other_transactions,
         inventory_counts=inventory_counts,
+        products_inventory=products_inventory,
     )
     snapshot["rules"] = evaluate_rules(snapshot)
     if fetch_error:
@@ -389,6 +392,18 @@ def money_or_na(value: Any) -> str:
     return money(value)
 
 
+def format_quantity(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if numeric.is_integer():
+        return str(int(numeric))
+    return f"{numeric:g}"
+
+
 def format_trend_line(label: str, period: dict[str, Any]) -> str:
     return (
         f"{label}: doanh thu {money(period.get('revenue', 0))}, "
@@ -475,14 +490,34 @@ def format_inventory(inventory_intelligence: dict[str, Any]) -> str:
     inventory_value = inventory_intelligence.get("inventory_value")
     value_text = "N/A" if inventory_value is None else money(inventory_value)
     low_stock = inventory_intelligence.get("low_stock_items") or []
+    overstock = inventory_intelligence.get("overstock_items") or []
     stockout_risk = inventory_intelligence.get("stockout_risk") or []
     status = inventory_intelligence.get("status") or "Unknown"
-    return (
+    lines = [
         f"Health: {score_text} - {status}; "
         f"Stock Value: {value_text}; "
         f"Low Stock: {len(low_stock)}; "
-        f"Stockout Risk: {len(stockout_risk)}"
-    )
+        f"Stockout Risk: {len(stockout_risk)}; "
+        f"Overstock: {len(overstock)}"
+    ]
+
+    if low_stock:
+        lines.append("Low Stock Top:")
+        for item in low_stock[:3]:
+            lines.append(
+                f"- {item.get('name') or item.get('code') or 'N/A'}: "
+                f"{format_quantity(item.get('on_hand'))} / {format_quantity(item.get('min_quantity'))}"
+            )
+
+    if stockout_risk:
+        lines.append("Stockout Top:")
+        for item in stockout_risk[:3]:
+            lines.append(
+                f"- {item.get('name') or item.get('code') or 'N/A'}: "
+                f"{format_quantity(item.get('on_hand'))}"
+            )
+
+    return "\n".join(lines)
 
 
 def format_priorities(decision_package: dict[str, Any]) -> list[str]:

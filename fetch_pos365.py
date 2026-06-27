@@ -6,11 +6,13 @@ from datetime import date as Date
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+import logging
 
 import requests
 
 
 CA_BUNDLE_PATH = Path(__file__).resolve().parent / "certs" / "pos365_ca_bundle.pem"
+LOGGER = logging.getLogger(__name__)
 
 
 class Pos365Client:
@@ -58,6 +60,24 @@ class Pos365Client:
 
     def get_products(self) -> list[dict[str, Any]]:
         payload = self._get("/api/json/reply/ProductList", {"Take": 1000})
+        return self._results(payload)
+
+    def get_products_inventory(self) -> list[dict[str, Any]]:
+        try:
+            payload = self._get(
+                "/api/products",
+                {
+                    "format": "json",
+                    "IncludeSummary": "true",
+                    "$inlinecount": "allpages",
+                    "CategoryId": -1,
+                    "PartnerId": 0,
+                    "$top": 1000,
+                },
+            )
+        except Exception as exc:
+            LOGGER.warning("POS365 read-only endpoint failed: products_inventory: %s", exc)
+            return []
         return self._results(payload)
 
     def get_orders(self, date: Date | str) -> list[dict[str, Any]]:

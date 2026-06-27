@@ -6,6 +6,18 @@ Dự án tuân theo Semantic Versioning.
 
 ---
 
+## [v1.2-inventory-api] - 2026-06-28
+
+Added:
+- POS365 Inventory API integration via GET /api/products
+- Inventory value
+- Low stock detection
+- Overstock detection
+- Stockout risk detection
+- Inventory health score
+
+---
+
 # [v1.0] - 2026-06-27
 
 ## 🎉 First Stable Release

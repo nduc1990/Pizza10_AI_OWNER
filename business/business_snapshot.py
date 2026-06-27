@@ -31,6 +31,7 @@ def build_business_snapshot(
     order_stocks_history: list[dict[str, Any]] | None = None,
     other_transactions: list[dict[str, Any]] | None = None,
     inventory_counts: list[dict[str, Any]] | None = None,
+    products_inventory: list[dict[str, Any]] | None = None,
     store: str = "Pizza 10 Điểm - CS1",
 ) -> dict[str, Any]:
     finance_intelligence = build_finance_intelligence(
@@ -63,7 +64,10 @@ def build_business_snapshot(
         ),
         "finance": build_finance_metrics(supplier_debt),
         "finance_intelligence": finance_intelligence,
-        "inventory_intelligence": build_inventory_intelligence(stock_items),
+        "inventory_intelligence": build_inventory_intelligence(
+            stock_items=stock_items,
+            products_inventory=products_inventory,
+        ),
         "pos365_api": {
             "accounting_transactions": accounting_transactions or [],
             "accounting_transaction_groups": accounting_transaction_groups or [],
@@ -72,5 +76,6 @@ def build_business_snapshot(
             "order_stocks_history": order_stocks_history or [],
             "other_transactions": other_transactions or [],
             "inventory_counts": inventory_counts or [],
+            "products_inventory": products_inventory or [],
         },
     }
