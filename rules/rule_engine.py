@@ -33,6 +33,10 @@ def evaluate_rules(
     product_dependency = product_intelligence.get("product_dependency") or {}
     cash_health = finance_intelligence.get("cash_health") or {}
     supplier_metrics = finance_intelligence.get("supplier") or {}
+    total_receipts = nullable_number(finance_intelligence.get("total_receipts"))
+    total_payments = nullable_number(finance_intelligence.get("total_payments"))
+    net_cash_flow = nullable_number(finance_intelligence.get("net_cash_flow"))
+    purchase_today = nullable_number(finance_intelligence.get("purchase_today"))
     low_stock_items = inventory_intelligence.get("low_stock_items") or []
     overstock_items = inventory_intelligence.get("overstock_items") or []
     stockout_risk = inventory_intelligence.get("stockout_risk") or []
@@ -272,6 +276,49 @@ def evaluate_rules(
                 cash_score,
                 80,
                 "Kiểm tra tiền mặt, ngân hàng và công nợ NCC để tránh thiếu dòng tiền.",
+            )
+        )
+
+    if net_cash_flow is not None and net_cash_flow < 0:
+        medium.append(
+            make_rule(
+                "NEGATIVE_CASH_FLOW",
+                "MEDIUM",
+                "Net cash flow âm",
+                f"Net cash flow hôm nay là {format_money(net_cash_flow)}.",
+                "net_cash_flow",
+                round(net_cash_flow),
+                0,
+                "Kiểm tra phiếu chi, thanh toán NCC và dòng tiền trong ngày.",
+            )
+        )
+
+    if total_payments is not None and total_receipts is not None and total_payments > total_receipts:
+        medium.append(
+            make_rule(
+                "HIGH_DAILY_EXPENSE",
+                "MEDIUM",
+                "Phiếu chi cao hơn phiếu thu",
+                f"Phiếu chi {format_money(total_payments)} cao hơn phiếu thu {format_money(total_receipts)}.",
+                "total_payments",
+                round(total_payments),
+                round(total_receipts),
+                "Đối soát các khoản chi lớn và xác nhận kế hoạch tiền mặt/ngân hàng.",
+            )
+        )
+
+    revenue_today = number(sales.get("revenue"))
+    if purchase_today is not None and purchase_today > revenue_today:
+        medium.append(
+            make_rule(
+                "HIGH_PURCHASE_TODAY",
+                "MEDIUM",
+                "Nhập hàng cao hơn doanh thu",
+                f"Nhập hàng hôm nay {format_money(purchase_today)} cao hơn doanh thu {format_money(revenue_today)}.",
+                "purchase_today",
+                round(purchase_today),
+                round(revenue_today),
+                "Kiểm tra lý do nhập hàng và đối chiếu tồn kho/nguyên liệu bán chạy.",
             )
         )
 

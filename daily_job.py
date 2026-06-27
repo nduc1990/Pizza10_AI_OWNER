@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from datetime import date as Date
 from datetime import datetime, timedelta
@@ -19,6 +20,9 @@ from rules.rule_engine import evaluate_rules, make_rule
 from telegram_sender import print_console, send_telegram_message
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 def main() -> None:
     configure_console_encoding()
     args = parse_args()
@@ -32,6 +36,13 @@ def main() -> None:
     previous_order_details: list[dict[str, Any]] = []
     history_orders_by_date = build_empty_history(report_date, 30)
     history_order_details_by_date = build_empty_history(report_date, 30)
+    accounting_transactions: list[dict[str, Any]] = []
+    accounting_transaction_groups: list[dict[str, Any]] = []
+    accounts_tree: list[dict[str, Any]] = []
+    order_stocks: list[dict[str, Any]] = []
+    order_stocks_history: list[dict[str, Any]] = []
+    other_transactions: list[dict[str, Any]] = []
+    inventory_counts: list[dict[str, Any]] = []
 
     fetch_error = None
     try:
@@ -53,6 +64,36 @@ def main() -> None:
         history_order_details_by_date = fetch_history_details_by_date(
             client, history_orders_by_date
         )
+        accounting_transactions = fetch_read_only_list(
+            "accounting_transactions",
+            lambda: client.get_accounting_transactions(report_date),
+        )
+        accounting_transaction_groups = fetch_read_only_list(
+            "accounting_transaction_groups",
+            client.get_accounting_transaction_groups,
+        )
+        accounts_tree = fetch_read_only_list(
+            "accounts_tree",
+            client.get_accounts_tree,
+        )
+        order_stocks = fetch_read_only_list(
+            "order_stocks",
+            lambda: client.get_order_stocks(report_date),
+        )
+        order_stocks_history = fetch_read_only_list(
+            "order_stocks_history",
+            lambda: client.get_order_stocks_range(
+                report_date - timedelta(days=29), report_date
+            ),
+        )
+        other_transactions = fetch_read_only_list(
+            "other_transactions",
+            lambda: client.get_other_transactions(report_date),
+        )
+        inventory_counts = fetch_read_only_list(
+            "inventory_counts",
+            lambda: client.get_inventory_counts(report_date),
+        )
     except Exception as exc:
         fetch_error = str(exc)
 
@@ -65,6 +106,13 @@ def main() -> None:
         previous_order_details,
         history_orders_by_date,
         history_order_details_by_date,
+        accounting_transactions=accounting_transactions,
+        accounting_transaction_groups=accounting_transaction_groups,
+        accounts_tree=accounts_tree,
+        order_stocks=order_stocks,
+        order_stocks_history=order_stocks_history,
+        other_transactions=other_transactions,
+        inventory_counts=inventory_counts,
     )
     snapshot["rules"] = evaluate_rules(snapshot)
     if fetch_error:
@@ -112,6 +160,18 @@ def fetch_details(client: Pos365Client, orders: list[dict[str, Any]]) -> list[di
     return details
 
 
+def fetch_read_only_list(label: str, getter: Any) -> list[dict[str, Any]]:
+    try:
+        result = getter()
+    except Exception as exc:
+        LOGGER.warning("POS365 read-only endpoint failed: %s: %s", label, exc)
+        return []
+    if isinstance(result, list):
+        return result
+    LOGGER.warning("POS365 read-only endpoint returned non-list: %s", label)
+    return []
+
+
 def build_empty_history(report_date: Date, days: int) -> dict[str, list[dict[str, Any]]]:
     start_date = report_date - timedelta(days=days - 1)
     return {
@@ -144,6 +204,7 @@ def fetch_history_details_by_date(
 
 
 def configure_console_encoding() -> None:
+    logging.basicConfig(level=logging.WARNING, format="WARNING: %(message)s")
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except (AttributeError, ValueError):
@@ -302,6 +363,7 @@ def save_daily_report(snapshot: dict[str, Any], ai_text: str) -> Path:
         "finance": snapshot.get("finance"),
         "finance_intelligence": snapshot.get("finance_intelligence"),
         "inventory_intelligence": snapshot.get("inventory_intelligence"),
+        "pos365_api": snapshot.get("pos365_api"),
         "decision_package": snapshot.get("decision_package"),
         "rules": snapshot.get("rules"),
         "ai_advice": ai_text,
@@ -319,6 +381,12 @@ def save_daily_report(snapshot: dict[str, Any], ai_text: str) -> Path:
 def money(value: Any) -> str:
     amount = int(round(float(value or 0)))
     return f"{amount:,}".replace(",", ".") + "đ"
+
+
+def money_or_na(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    return money(value)
 
 
 def format_trend_line(label: str, period: dict[str, Any]) -> str:
@@ -370,6 +438,8 @@ def format_menu_health(product_intelligence: dict[str, Any]) -> str:
 def format_finance(finance_intelligence: dict[str, Any]) -> str:
     cash_health = finance_intelligence.get("cash_health") or {}
     supplier = finance_intelligence.get("supplier") or {}
+    cash_flow = finance_intelligence.get("cash_flow") or {}
+    purchase = finance_intelligence.get("purchase") or {}
     supplier_rows = supplier.get("supplier_health") or []
 
     score = cash_health.get("score")
@@ -379,17 +449,24 @@ def format_finance(finance_intelligence: dict[str, Any]) -> str:
     if supplier_rows:
         first_supplier = supplier_rows[0]
         supplier_name = first_supplier.get("name") or "N/A"
-        supplier_debt = money(first_supplier.get("debt"))
+        supplier_debt = money_or_na(first_supplier.get("debt"))
         supplier_status = first_supplier.get("status") or "Unknown"
     else:
         supplier_name = "N/A"
         supplier_debt = "N/A"
         supplier_status = "Unknown"
 
-    return (
-        f"Cash Health: {score_text} - {cash_status}; "
-        f"Supplier Health: {supplier_name} - {supplier_debt} - {supplier_status}"
-    )
+    lines = [
+        f"Phiếu thu: {money(cash_flow.get('total_receipts'))}",
+        f"Phiếu chi: {money(cash_flow.get('total_payments'))}",
+        f"Net Cash Flow: {money(cash_flow.get('net_cash_flow'))}",
+        f"Nhập hàng hôm nay: {money(purchase.get('today'))}",
+        f"Cash/Bank: {money_or_na(cash_flow.get('cash'))} / {money_or_na(cash_flow.get('bank'))}",
+        f"Supplier Payment Today: {money(cash_flow.get('supplier_payment_today'))}",
+        f"Cash Health: {score_text} - {cash_status}",
+        f"Supplier Health: {supplier_name} - {supplier_debt} - {supplier_status}",
+    ]
+    return "\n".join(lines)
 
 
 def format_inventory(inventory_intelligence: dict[str, Any]) -> str:

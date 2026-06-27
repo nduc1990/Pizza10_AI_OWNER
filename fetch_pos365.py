@@ -19,11 +19,12 @@ class Pos365Client:
         self.username = username
         self.password = password
         self.session = requests.Session()
+        self.session.trust_env = False
         self.timeout = 30
         self.verify = str(CA_BUNDLE_PATH) if CA_BUNDLE_PATH.exists() else True
         self.authenticated = False
 
-    def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         url = f"{self.base_url}{path}"
         response = self.session.get(
             url, params=params or {}, timeout=self.timeout, verify=self.verify
@@ -32,12 +33,15 @@ class Pos365Client:
         return response.json()
 
     @staticmethod
-    def _results(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    def _results(payload: Any) -> list[dict[str, Any]]:
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+
         results = payload.get("results")
         if isinstance(results, list):
-            return results
-        if isinstance(payload, list):
-            return payload
+            return [item for item in results if isinstance(item, dict)]
         return []
 
     def authenticate(self) -> None:
@@ -78,6 +82,108 @@ class Pos365Client:
         payload = self._get("/api/json/reply/OrderGetDetail", {"OrderId": order_id})
         return self._results(payload)
 
+    def get_accounting_transactions(self, date: Date | str) -> list[dict[str, Any]]:
+        target_date = parse_report_date(date)
+        payload = self._get(
+            "/api/accountingtransaction",
+            {
+                "format": "json",
+                "Includes": ["Partner", "Group", "Account"],
+                "$inlinecount": "allpages",
+                "$top": 1000,
+            },
+        )
+        rows = self._results(payload)
+        return [
+            row for row in rows
+            if same_local_day(first_row_datetime(row, ("TransDate", "DocumentDate", "CreatedDate", "Date")), target_date)
+        ]
+
+    def get_accounting_transaction_groups(self) -> list[dict[str, Any]]:
+        payload = self._get(
+            "/api/accountingtransactiongroups",
+            {"format": "json"},
+        )
+        return self._results(payload)
+
+    def get_accounts_tree(self) -> list[dict[str, Any]]:
+        payload = self._get("/api/accounts/treeview")
+        return self._results(payload)
+
+    def get_order_stocks(self, date: Date | str) -> list[dict[str, Any]]:
+        target_date = parse_report_date(date)
+        payload = self._get(
+            "/api/orderstock",
+            {
+                "format": "json",
+                "Includes": "Partner",
+                "IncludeSummary": "true",
+                "$inlinecount": "allpages",
+                "$top": 1000,
+            },
+        )
+        rows = self._results(payload)
+        return [
+            row for row in rows
+            if not is_summary_row(row)
+            and same_local_day(first_row_datetime(row, ("DocumentDate", "CreatedDate", "Date")), target_date)
+        ]
+
+    def get_order_stocks_range(self, start_date: Date | str, end_date: Date | str) -> list[dict[str, Any]]:
+        start = parse_report_date(start_date)
+        end = parse_report_date(end_date)
+        payload = self._get(
+            "/api/orderstock",
+            {
+                "format": "json",
+                "Includes": "Partner",
+                "IncludeSummary": "true",
+                "$inlinecount": "allpages",
+                "$top": 1000,
+            },
+        )
+        rows = self._results(payload)
+        result = []
+        for row in rows:
+            if is_summary_row(row):
+                continue
+            parsed = first_row_datetime(row, ("DocumentDate", "CreatedDate", "Date"))
+            if parsed and start <= parsed.date() <= end:
+                result.append(row)
+        return result
+
+    def get_other_transactions(self, date: Date | str) -> list[dict[str, Any]]:
+        target_date = parse_report_date(date)
+        payload = self._get(
+            "/api/othertransaction",
+            {
+                "format": "json",
+                "$inlinecount": "allpages",
+                "$top": 1000,
+            },
+        )
+        rows = self._results(payload)
+        return [
+            row for row in rows
+            if same_local_day(first_row_datetime(row, ("DocumentDate", "CreatedDate", "Date")), target_date)
+        ]
+
+    def get_inventory_counts(self, date: Date | str) -> list[dict[str, Any]]:
+        target_date = parse_report_date(date)
+        payload = self._get(
+            "/api/inventorycount",
+            {
+                "format": "json",
+                "$inlinecount": "allpages",
+                "$top": 1000,
+            },
+        )
+        rows = self._results(payload)
+        return [
+            row for row in rows
+            if same_local_day(first_row_datetime(row, ("AdjustmentDate", "DocumentDate", "CreatedDate", "Date")), target_date)
+        ]
+
 
 def parse_report_date(value: Date | str) -> Date:
     if isinstance(value, Date):
@@ -115,6 +221,19 @@ def order_date(order: dict[str, Any]) -> datetime | None:
         if parsed:
             return parsed
     return None
+
+
+def first_row_datetime(row: dict[str, Any], fields: tuple[str, ...]) -> datetime | None:
+    for field in fields:
+        parsed = parse_pos365_datetime(row.get(field))
+        if parsed:
+            return parsed
+    return None
+
+
+def is_summary_row(row: dict[str, Any]) -> bool:
+    code = str(row.get("Code") or "").strip()
+    return code in {"Σ", "Î£"} or row.get("Id") == -1
 
 
 def same_local_day(value: datetime | None, target_date: Date) -> bool:
